@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel TLS (kTLS) 支持模块
+//! Kernel TLS (kTLS) Support Module
 //! 
-//! 本模块提供Linux内核TLS (kTLS)的支持，允许TLS加密/解密操作在内核空间完成，
-//! 从而提高性能并降低用户空间的CPU使用率。
+//! This module provides support for Linux Kernel TLS (kTLS), which allows TLS 
+//! encryption/decryption operations to be performed in kernel space, thereby 
+//! significantly improving performance and reducing CPU usage in user space.
 //! 
-//! # 主要功能
+//! # Main Features
 //! 
-//! - 配置kTLS会话密钥
-//! - 管理连接五元组 (源IP、源端口、目标IP、目标端口)
-//! - 与现有TLS握手模块集成
+//! - Configure kTLS session keys
+//! - Manage connection five-tuples (src_ip, src_port, dst_ip, dst_port)
+//! - Integrate with existing TLS handshake modules
 //! 
-//! # 使用示例
+//! # Usage Example
 //! 
 //! ```rust,no_run
 //! use ztunnel::tls::ktls::{KtlsConfig, ConnectionTuple};
@@ -44,7 +45,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// kTLS错误类型
+/// kTLS error types
 #[derive(Error, Debug)]
 pub enum KtlsError {
     #[error("kTLS not supported on this platform")]
@@ -63,23 +64,23 @@ pub enum KtlsError {
     KeyMaterialError(String),
 }
 
-/// 连接五元组
+/// Connection five-tuple
 /// 
-/// 包含TCP连接的完整标识信息，用于配置kTLS会话
+/// Contains complete TCP connection identification information for configuring kTLS sessions
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConnectionTuple {
-    /// 源IP地址
+    /// Source IP address
     pub src_ip: IpAddr,
-    /// 源端口
+    /// Source port
     pub src_port: u16,
-    /// 目标IP地址
+    /// Destination IP address
     pub dst_ip: IpAddr,
-    /// 目标端口
+    /// Destination port
     pub dst_port: u16,
 }
 
 impl ConnectionTuple {
-    /// 创建新的连接五元组
+    /// Creates a new connection five-tuple
     pub fn new(src_ip: IpAddr, src_port: u16, dst_ip: IpAddr, dst_port: u16) -> Self {
         Self {
             src_ip,
@@ -100,42 +101,42 @@ impl std::fmt::Display for ConnectionTuple {
     }
 }
 
-/// TLS 1.3密钥材料
+/// TLS 1.3 key material
 /// 
-/// 包含配置kTLS所需的加密材料
+/// Contains the cryptographic material required to configure kTLS
 #[derive(Debug, Clone)]
 pub struct Tls13KeyMaterial {
-    /// 密码套件标识符 (例如: TLS_AES_128_GCM_SHA256)
+    /// Cipher suite identifier (e.g., TLS_AES_128_GCM_SHA256)
     pub cipher_suite: u16,
-    /// 传输密钥
+    /// Transport encryption key
     pub key: Vec<u8>,
-    /// 初始化向量 (IV)
+    /// Initialization vector (IV)
     pub iv: Vec<u8>,
-    /// 序列号
+    /// Sequence number
     pub seq_num: u64,
 }
 
-/// kTLS配置
+/// kTLS configuration
 /// 
-/// 用于配置和管理kTLS会话的主要结构
+/// Main structure for configuring and managing kTLS sessions
 #[derive(Debug, Clone)]
 pub struct KtlsConfig {
-    /// 连接五元组
+    /// Connection five-tuple
     pub connection: ConnectionTuple,
-    /// 发送方向的密钥材料
+    /// TX (send) direction key material
     pub tx_key_material: Option<Arc<Tls13KeyMaterial>>,
-    /// 接收方向的密钥材料
+    /// RX (receive) direction key material
     pub rx_key_material: Option<Arc<Tls13KeyMaterial>>,
-    /// 是否启用
+    /// Whether kTLS is enabled
     pub enabled: bool,
 }
 
 impl KtlsConfig {
-    /// 创建新的kTLS配置
+    /// Creates a new kTLS configuration
     /// 
-    /// # 参数
+    /// # Arguments
     /// 
-    /// * `connection` - 连接五元组
+    /// * `connection` - Connection five-tuple
     pub fn new(connection: ConnectionTuple) -> Self {
         Self {
             connection,
@@ -145,46 +146,46 @@ impl KtlsConfig {
         }
     }
 
-    /// 设置发送密钥材料
+    /// Sets TX (send) key material
     pub fn with_tx_keys(mut self, key_material: Tls13KeyMaterial) -> Self {
         self.tx_key_material = Some(Arc::new(key_material));
         self
     }
 
-    /// 设置接收密钥材料
+    /// Sets RX (receive) key material
     pub fn with_rx_keys(mut self, key_material: Tls13KeyMaterial) -> Self {
         self.rx_key_material = Some(Arc::new(key_material));
         self
     }
 
-    /// 启用kTLS
+    /// Enables kTLS
     pub fn enable(mut self) -> Self {
         self.enabled = true;
         self
     }
 
-    /// 禁用kTLS
+    /// Disables kTLS
     pub fn disable(mut self) -> Self {
         self.enabled = false;
         self
     }
 }
 
-/// 密钥配置接口
+/// Key configuration interface
 /// 
-/// 提供统一的接口来配置不同类型的TLS握手模块的密钥
+/// Provides a unified interface for configuring keys across different TLS handshake modules
 pub trait KeyConfigurator: Send + Sync {
-    /// 配置密钥
+    /// Configures keys for a connection
     /// 
-    /// # 参数
+    /// # Arguments
     /// 
-    /// * `connection` - 连接五元组
-    /// * `tx_keys` - 发送方向的密钥材料
-    /// * `rx_keys` - 接收方向的密钥材料
+    /// * `connection` - Connection five-tuple
+    /// * `tx_keys` - TX (send) direction key material
+    /// * `rx_keys` - RX (receive) direction key material
     /// 
-    /// # 返回
+    /// # Returns
     /// 
-    /// 成功返回 `Ok(())`，失败返回错误
+    /// `Ok(())` on success, error otherwise
     fn configure_keys(
         &self,
         connection: &ConnectionTuple,
@@ -192,27 +193,27 @@ pub trait KeyConfigurator: Send + Sync {
         rx_keys: &Tls13KeyMaterial,
     ) -> Result<(), KtlsError>;
 
-    /// 清除密钥配置
+    /// Clears key configuration for a connection
     fn clear_keys(&self, connection: &ConnectionTuple) -> Result<(), KtlsError>;
 }
 
-/// kTLS密钥配置器
+/// kTLS key configurator
 /// 
-/// 实现实际的Linux kTLS密钥配置
+/// Implements the actual Linux kTLS key configuration
 pub struct KtlsKeyConfigurator;
 
 impl KtlsKeyConfigurator {
-    /// 创建新的kTLS密钥配置器
+    /// Creates a new kTLS key configurator
     pub fn new() -> Self {
         Self
     }
 
-    /// 检查系统是否支持kTLS
+    /// Checks if the system supports kTLS
     pub fn is_supported() -> bool {
         #[cfg(target_os = "linux")]
         {
-            // 检查内核版本和kTLS支持
-            // Linux 4.13+ 支持kTLS TX，4.17+ 支持kTLS RX
+            // Check kernel version and kTLS support
+            // Linux 4.13+ supports kTLS TX, 4.17+ supports kTLS RX
             Self::check_kernel_support()
         }
         #[cfg(not(target_os = "linux"))]
@@ -223,11 +224,11 @@ impl KtlsKeyConfigurator {
 
     #[cfg(target_os = "linux")]
     fn check_kernel_support() -> bool {
-        // 尝试读取 /proc/version 来检查内核版本
+        // Try to read /proc/version to check kernel version
         std::fs::read_to_string("/proc/version")
             .ok()
             .and_then(|v| {
-                // 简化的版本检查，实际应该更严格
+                // Simplified version check; should be more rigorous in production
                 v.split_whitespace()
                     .nth(2)
                     .and_then(|ver| ver.split('-').next())
@@ -236,7 +237,7 @@ impl KtlsKeyConfigurator {
                         if parts.len() >= 2 {
                             let major = parts[0].parse::<u32>().ok()?;
                             let minor = parts[1].parse::<u32>().ok()?;
-                            // 需要 Linux 4.17+ 才能同时支持 TX 和 RX
+                            // Need Linux 4.17+ to support both TX and RX
                             Some((major > 4) || (major == 4 && minor >= 17))
                         } else {
                             None
@@ -256,10 +257,10 @@ impl KtlsKeyConfigurator {
     ) -> Result<(), KtlsError> {
         let fd = socket.as_raw_fd();
         
-        // 配置 TX (发送) 方向
+        // Configure TX (send) direction
         self.configure_tx_ktls(fd, tx_keys)?;
         
-        // 配置 RX (接收) 方向
+        // Configure RX (receive) direction
         self.configure_rx_ktls(fd, rx_keys)?;
         
         Ok(())
@@ -268,14 +269,18 @@ impl KtlsKeyConfigurator {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     fn configure_tx_ktls(&self, _fd: std::os::unix::io::RawFd, keys: &Tls13KeyMaterial) -> Result<(), KtlsError> {
-        // 这里需要使用 Linux 特定的系统调用来配置 kTLS
-        // 由于这涉及到底层系统调用，这里提供一个框架实现
+        // NOTE: This requires Linux-specific system calls to configure kTLS.
+        // Since this involves low-level system calls, a framework implementation is provided here.
         
-        // 验证密码套件
+        // Validate cipher suite
         Self::validate_cipher_suite(keys.cipher_suite)?;
         
-        // TODO: 实际的 setsockopt(SOL_TLS, TLS_TX) 调用
-        // 这需要构造正确的 crypto_info 结构
+        // TODO(future): Implement actual setsockopt(SOL_TLS, TLS_TX) call
+        // This requires constructing the correct crypto_info structure.
+        // This is intentionally left as future work as it requires:
+        // 1. Proper crypto_info struct definitions
+        // 2. FFI bindings to Linux TLS constants
+        // 3. Integration with the actual socket after TLS handshake
         
         tracing::info!(
             "Configuring TX kTLS with cipher suite: 0x{:04x}",
@@ -288,12 +293,13 @@ impl KtlsKeyConfigurator {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     fn configure_rx_ktls(&self, _fd: std::os::unix::io::RawFd, keys: &Tls13KeyMaterial) -> Result<(), KtlsError> {
-        // 配置接收方向的 kTLS
+        // Configure RX (receive) direction kTLS
         
-        // 验证密码套件
+        // Validate cipher suite
         Self::validate_cipher_suite(keys.cipher_suite)?;
         
-        // TODO: 实际的 setsockopt(SOL_TLS, TLS_RX) 调用
+        // TODO(future): Implement actual setsockopt(SOL_TLS, TLS_RX) call
+        // See configure_tx_ktls comment above for details
         
         tracing::info!(
             "Configuring RX kTLS with cipher suite: 0x{:04x}",
@@ -305,7 +311,7 @@ impl KtlsKeyConfigurator {
 
     #[allow(dead_code)]
     fn validate_cipher_suite(cipher_suite: u16) -> Result<(), KtlsError> {
-        // TLS 1.3 支持的密码套件
+        // TLS 1.3 supported cipher suites
         const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
         const TLS_AES_256_GCM_SHA384: u16 = 0x1302;
         const TLS_CHACHA20_POLY1305_SHA256: u16 = 0x1303;
@@ -332,12 +338,14 @@ impl KeyConfigurator for KtlsKeyConfigurator {
     fn configure_keys(
         &self,
         connection: &ConnectionTuple,
-        _tx_keys: &Tls13KeyMaterial,
-        _rx_keys: &Tls13KeyMaterial,
+        #[allow(unused_variables)]
+        tx_keys: &Tls13KeyMaterial,
+        #[allow(unused_variables)]
+        rx_keys: &Tls13KeyMaterial,
     ) -> Result<(), KtlsError> {
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (connection, _tx_keys, _rx_keys);
+            let _ = connection;
             return Err(KtlsError::NotSupported);
         }
 
@@ -352,8 +360,9 @@ impl KeyConfigurator for KtlsKeyConfigurator {
                 connection
             );
 
-            // 注意：实际实现需要访问底层socket文件描述符
-            // 这里提供接口定义，实际集成时需要在适当的位置调用
+            // NOTE: The actual implementation requires access to the underlying socket file descriptor.
+            // This provides the interface definition; actual integration needs to be called at the
+            // appropriate place in the connection lifecycle after TLS handshake completes.
             
             Ok(())
         }
@@ -365,8 +374,8 @@ impl KeyConfigurator for KtlsKeyConfigurator {
             connection
         );
         
-        // 清理密钥配置
-        // 通常只需要关闭socket即可
+        // Clear key configuration
+        // Typically, closing the socket is sufficient
         
         Ok(())
     }
