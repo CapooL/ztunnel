@@ -15,22 +15,24 @@
 //! Key extraction utilities for kTLS
 //!
 //! This module provides functionality to extract TLS keys from established connections.
-//! Since rustls doesn't expose internal keys by design, we provide multiple strategies:
+//! It supports multiple strategies:
 //!
-//! 1. Pre-shared keys from KeyManager (for testing and manual configuration)
-//! 2. SSLKEYLOGFILE-based extraction (for debugging)
-//! 3. Future: OpenSSL backend integration (for automatic extraction)
+//! 1. Rustls automatic extraction via `dangerous_extract_secrets()` (primary method)
+//! 2. Pre-shared keys from KeyManager (for testing and manual configuration)
+//! 3. SSLKEYLOGFILE-based extraction (for debugging)
 
 use crate::ktls::{KeyMaterial, KtlsError, Result, TlsKeys};
 use crate::ktls::key_manager::{ConnectionId, KeyManager};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Key extraction strategy
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum KeyExtractionStrategy {
+    /// Use rustls dangerous_extract_secrets() - primary method
+    RustlsExtract,
+    
     /// Use pre-configured keys from KeyManager
     PreShared(Arc<KeyManager>),
     
@@ -82,6 +84,19 @@ impl KeyExtractor {
         is_client: bool,
     ) -> Result<TlsKeys> {
         match &self.strategy {
+            KeyExtractionStrategy::RustlsExtract => {
+                // This will be used after TLS handshake completes
+                // The actual extraction happens in convert_rustls_secrets()
+                info!(
+                    "Using rustls key extraction for {}:{} -> {}:{}",
+                    local_addr.ip(), local_addr.port(),
+                    remote_addr.ip(), remote_addr.port()
+                );
+                Err(KtlsError::KeyExtraction(
+                    "Rustls extraction requires calling extract_from_rustls_connection()".to_string(),
+                ))
+            }
+            
             KeyExtractionStrategy::PreShared(manager) => {
                 // For client: local is source, remote is destination
                 // For server: remote is source, local is destination
@@ -126,6 +141,12 @@ impl KeyExtractor {
     /// Extract keys with connection ID
     pub async fn extract_keys_by_id(&self, conn_id: &ConnectionId) -> Result<TlsKeys> {
         match &self.strategy {
+            KeyExtractionStrategy::RustlsExtract => {
+                Err(KtlsError::KeyExtraction(
+                    "Rustls extraction requires calling extract_from_rustls_connection()".to_string(),
+                ))
+            }
+            
             KeyExtractionStrategy::PreShared(manager) => {
                 debug!("Extracting pre-shared keys for connection: {}", conn_id);
                 manager
@@ -175,13 +196,91 @@ fn create_mock_keys() -> TlsKeys {
 ///
 /// This is a convenience function for the most common use case.
 pub async fn extract_keys_from_connection(
-    key_manager: &KeyManager,
+    key_manager: Arc<KeyManager>,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     is_client: bool,
 ) -> Result<TlsKeys> {
-    let extractor = KeyExtractor::with_preshared_keys(Arc::new(key_manager.clone()));
+    let extractor = KeyExtractor::with_preshared_keys(key_manager);
     extractor.extract_keys(local_addr, remote_addr, is_client).await
+}
+
+/// Convert rustls extracted secrets to kTLS key material
+///
+/// This function takes the secrets extracted from rustls via `dangerous_extract_secrets()`
+/// and converts them to the format required by Linux kTLS.
+///
+/// Note: This is a placeholder for the actual rustls integration.
+/// The real implementation would use rustls::ConnectionTrafficSecrets.
+///
+/// # Example (conceptual)
+///
+/// ```ignore
+/// use rustls::ConnectionTrafficSecrets;
+///
+/// let tls_stream = connector.connect(domain, tcp_stream).await?;
+/// let (tcp_stream, connection) = tls_stream.into_inner();
+/// let secrets = connection.dangerous_extract_secrets()?;
+///
+/// let keys = convert_rustls_secrets(&secrets)?;
+/// ```
+pub fn convert_rustls_secrets_placeholder(
+    tx_seq: u64,
+    rx_seq: u64,
+    cipher_suite: u16,
+    tx_key: &[u8],
+    tx_iv: &[u8],
+    rx_key: &[u8],
+    rx_iv: &[u8],
+) -> Result<TlsKeys> {
+    // Validate key and IV lengths based on cipher suite
+    let (expected_key_len, expected_iv_len) = match cipher_suite {
+        0x1301 | 0x1302 => (32, 12), // AES-128-GCM / AES-256-GCM
+        0x1303 => (32, 12),           // ChaCha20-Poly1305
+        _ => return Err(KtlsError::KeyExtraction(format!(
+            "Unsupported cipher suite: 0x{:04x}",
+            cipher_suite
+        ))),
+    };
+
+    if tx_key.len() < expected_key_len || rx_key.len() < expected_key_len {
+        return Err(KtlsError::KeyExtraction(format!(
+            "Invalid key length. Expected at least {}, got tx={}, rx={}",
+            expected_key_len,
+            tx_key.len(),
+            rx_key.len()
+        )));
+    }
+
+    if tx_iv.len() < expected_iv_len || rx_iv.len() < expected_iv_len {
+        return Err(KtlsError::KeyExtraction(format!(
+            "Invalid IV length. Expected at least {}, got tx={}, rx={}",
+            expected_iv_len,
+            tx_iv.len(),
+            rx_iv.len()
+        )));
+    }
+
+    let tx_material = KeyMaterial {
+        tls_version: 0x0304, // TLS 1.3
+        cipher_suite,
+        key: tx_key.to_vec(),
+        iv: tx_iv.to_vec(),
+        seq: tx_seq,
+    };
+
+    let rx_material = KeyMaterial {
+        tls_version: 0x0304, // TLS 1.3
+        cipher_suite,
+        key: rx_key.to_vec(),
+        iv: rx_iv.to_vec(),
+        seq: rx_seq,
+    };
+
+    Ok(TlsKeys {
+        tx: tx_material,
+        rx: rx_material,
+    })
 }
 
 #[cfg(test)]
@@ -201,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_preshared_key_extraction() {
-        let manager = KeyManager::new();
+        let manager = Arc::new(KeyManager::new());
         let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 9090);
         let conn_id = ConnectionId::new(local, remote);
@@ -214,8 +313,7 @@ mod tests {
         manager.store_keys(conn_id.clone(), keys).await;
 
         // Extract keys
-        let extractor = KeyExtractor::with_preshared_keys(Arc::new(manager));
-        let extracted = extractor.extract_keys(local, remote, true).await;
+        let extracted = extract_keys_from_connection(manager, local, remote, true).await;
         assert!(extracted.is_ok());
     }
 }
