@@ -36,6 +36,7 @@
 
 pub mod config;
 pub mod connection;
+pub mod key_extraction;
 pub mod key_manager;
 
 #[cfg(target_os = "linux")]
@@ -43,6 +44,7 @@ pub mod linux;
 
 pub use config::KtlsConfig;
 pub use connection::{KtlsConnection, KtlsMode};
+pub use key_extraction::{KeyExtractor, KeyExtractionStrategy};
 pub use key_manager::{KeyMaterial, KeyManager, TlsKeys};
 
 use thiserror::Error;
