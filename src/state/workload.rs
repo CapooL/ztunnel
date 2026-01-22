@@ -90,6 +90,8 @@ pub enum OutboundProtocol {
     TCP,
     HBONE,
     DOUBLEHBONE,
+    /// kTLS direct socket mode - bypasses HBONE and uses kernel TLS
+    KTLS,
 }
 
 impl From<InboundProtocol> for OutboundProtocol {

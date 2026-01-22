@@ -226,6 +226,10 @@ impl OutboundConnection {
                 self.proxy_to_tcp(source_stream, &req, &result_tracker)
                     .await
             }
+            OutboundProtocol::KTLS => {
+                self.proxy_to_ktls_direct(source_stream, source_addr, &req, &result_tracker)
+                    .await
+            }
         };
         result_tracker.record(res)
     }
@@ -358,9 +362,59 @@ impl OutboundConnection {
         .await
     }
 
+    /// Proxy connection using kTLS direct mode (bypass HBONE)
+    ///
+    /// This method implements the kTLS direct socket mode where:
+    /// 1. The original socket from the application is used directly
+    /// 2. TLS handshake is performed with the destination workload
+    /// 3. Keys are extracted and kTLS is configured
+    /// 4. The socket becomes a direct encrypted connection to destination
+    /// 5. Traffic flows directly without HTTP/2 encapsulation or proxying
+    ///
+    /// Note: In this mode, we don't proxy data. The socket itself IS the
+    /// connection to the destination, and the kernel handles encryption.
+    async fn proxy_to_ktls_direct(
+        &mut self,
+        _stream: TcpStream,
+        _remote_addr: SocketAddr,
+        _req: &Request,
+        _connection_stats: &ConnectionResult,
+    ) -> Result<(), Error> {
+        // Check if kTLS is properly enabled
+        if !self.pi.cfg.ktls_config.enabled
+            || !self.pi.cfg.ktls_config.outbound_enabled
+            || !self.pi.cfg.ktls_config.direct_socket_mode
+        {
+            return Err(Error::Generic(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "kTLS direct mode not enabled in configuration",
+            ))));
+        }
+
+        // TODO: Full kTLS direct mode implementation
+        // 
+        // The complete implementation requires:
+        // 1. Modify the socket interception at iptables level to preserve destination
+        // 2. Perform TLS handshake directly with the destination (not with another ztunnel)
+        // 3. Extract keys and configure kTLS on the socket
+        // 4. Return the socket to the application (not proxy data)
+        //
+        // This is a significant architectural change that needs:
+        // - Changes to socket handling at the listener level
+        // - New connection tracking mechanism
+        // - Coordination with inbound ztunnel for proper handshake
+        //
+        // For now, return an error indicating this is not yet fully implemented.
+        
+        Err(Error::Generic(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "kTLS direct mode is not yet fully implemented. Use HBONE mode instead.",
+        ))))
+    }
+
     fn conn_metrics_from_request(req: &Request) -> ConnectionOpen {
         let (derived_source, security_policy) = match req.protocol {
-            OutboundProtocol::HBONE | OutboundProtocol::DOUBLEHBONE => (
+            OutboundProtocol::HBONE | OutboundProtocol::DOUBLEHBONE | OutboundProtocol::KTLS => (
                 Some(DerivedWorkload {
                     // We are going to do mTLS, so report our identity
                     identity: Some(req.source.as_ref().identity()),

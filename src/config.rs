@@ -316,6 +316,9 @@ pub struct Config {
 
     // path to CRL file; if set, enables CRL checking
     pub crl_path: Option<PathBuf>,
+
+    // kTLS configuration
+    pub ktls_config: crate::ktls::KtlsConfig,
 }
 
 #[derive(serde::Serialize, Clone, Copy, Debug)]
@@ -875,6 +878,8 @@ pub fn construct_config(pc: ProxyConfig) -> Result<Config, Error> {
             .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from),
+        
+        ktls_config: crate::ktls::KtlsConfig::default(),
     })
 }
 

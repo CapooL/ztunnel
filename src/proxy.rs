@@ -52,6 +52,7 @@ pub mod inbound;
 
 mod h2;
 mod inbound_passthrough;
+mod ktls_helpers;
 #[allow(non_camel_case_types)]
 pub mod metrics;
 mod outbound;

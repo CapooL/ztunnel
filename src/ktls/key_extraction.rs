@@ -26,6 +26,7 @@ use crate::ktls::key_manager::{ConnectionId, KeyManager};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use rustls::{ExtractedSecrets, ConnectionTrafficSecrets};
 
 /// Key extraction strategy
 #[derive(Clone)]
@@ -210,13 +211,10 @@ pub async fn extract_keys_from_connection(
 /// This function takes the secrets extracted from rustls via `dangerous_extract_secrets()`
 /// and converts them to the format required by Linux kTLS.
 ///
-/// Note: This is a placeholder for the actual rustls integration.
-/// The real implementation would use rustls::ConnectionTrafficSecrets.
-///
-/// # Example (conceptual)
+/// # Example
 ///
 /// ```ignore
-/// use rustls::ConnectionTrafficSecrets;
+/// use rustls::Connection;
 ///
 /// let tls_stream = connector.connect(domain, tcp_stream).await?;
 /// let (tcp_stream, connection) = tls_stream.into_inner();
@@ -224,57 +222,80 @@ pub async fn extract_keys_from_connection(
 ///
 /// let keys = convert_rustls_secrets(&secrets)?;
 /// ```
-pub fn convert_rustls_secrets_placeholder(
-    tx_seq: u64,
-    rx_seq: u64,
-    cipher_suite: u16,
-    tx_key: &[u8],
-    tx_iv: &[u8],
-    rx_key: &[u8],
-    rx_iv: &[u8],
-) -> Result<TlsKeys> {
-    // Validate key and IV lengths based on cipher suite
-    let (expected_key_len, expected_iv_len) = match cipher_suite {
-        0x1301 | 0x1302 => (32, 12), // AES-128-GCM / AES-256-GCM
-        0x1303 => (32, 12),           // ChaCha20-Poly1305
-        _ => return Err(KtlsError::KeyExtraction(format!(
-            "Unsupported cipher suite: 0x{:04x}",
-            cipher_suite
-        ))),
+pub fn convert_rustls_secrets(secrets: ExtractedSecrets) -> Result<TlsKeys> {
+    let (tx_seq, tx_secrets) = secrets.tx;
+    let (rx_seq, rx_secrets) = secrets.rx;
+
+    // Convert TX secrets
+    let tx_material = match tx_secrets {
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1301, // TLS_AES_128_GCM_SHA256
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1302, // TLS_AES_256_GCM_SHA384
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1303, // TLS_CHACHA20_POLY1305_SHA256
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        _ => {
+            return Err(KtlsError::InvalidCipherSuite(
+                "Unsupported cipher suite for kTLS".to_string()
+            ));
+        }
     };
 
-    if tx_key.len() < expected_key_len || rx_key.len() < expected_key_len {
-        return Err(KtlsError::KeyExtraction(format!(
-            "Invalid key length. Expected at least {}, got tx={}, rx={}",
-            expected_key_len,
-            tx_key.len(),
-            rx_key.len()
-        )));
-    }
-
-    if tx_iv.len() < expected_iv_len || rx_iv.len() < expected_iv_len {
-        return Err(KtlsError::KeyExtraction(format!(
-            "Invalid IV length. Expected at least {}, got tx={}, rx={}",
-            expected_iv_len,
-            tx_iv.len(),
-            rx_iv.len()
-        )));
-    }
-
-    let tx_material = KeyMaterial {
-        tls_version: 0x0304, // TLS 1.3
-        cipher_suite,
-        key: tx_key.to_vec(),
-        iv: tx_iv.to_vec(),
-        seq: tx_seq,
-    };
-
-    let rx_material = KeyMaterial {
-        tls_version: 0x0304, // TLS 1.3
-        cipher_suite,
-        key: rx_key.to_vec(),
-        iv: rx_iv.to_vec(),
-        seq: rx_seq,
+    // Convert RX secrets
+    let rx_material = match rx_secrets {
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1301,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1302,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1303,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        _ => {
+            return Err(KtlsError::InvalidCipherSuite(
+                "Unsupported cipher suite for kTLS".to_string()
+            ));
+        }
     };
 
     Ok(TlsKeys {
