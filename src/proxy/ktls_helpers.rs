@@ -37,20 +37,24 @@ use std::io;
 ///
 /// # Returns
 ///
-/// Returns the underlying TCP stream with kTLS configured, or the original
-/// TLS stream if kTLS is disabled or fails.
+/// Returns the underlying TCP stream with kTLS configured.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - kTLS is not enabled in configuration
+/// - Secret extraction fails
+/// - kTLS configuration fails
 pub async fn configure_ktls_outbound(
     tls_stream: client::TlsStream<TcpStream>,
     config: &Config,
 ) -> Result<TcpStream, io::Error> {
     // Check if kTLS is enabled for outbound
     if !config.ktls_config.enabled || !config.ktls_config.outbound_enabled {
-        debug!("kTLS not enabled for outbound, using standard TLS");
-        // We can't easily return the TLS stream, so we need to handle this differently
-        // For now, return an error indicating we can't proceed without kTLS support
+        debug!("kTLS not enabled for outbound, cannot configure");
         return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "kTLS is not enabled, cannot extract underlying TCP stream",
+            io::ErrorKind::InvalidInput,
+            "kTLS is not enabled in configuration",
         ));
     }
 
@@ -62,53 +66,36 @@ pub async fn configure_ktls_outbound(
     let remote_addr = tcp_stream.peer_addr()?;
 
     // Extract secrets from rustls connection
-    let secrets = match connection.dangerous_extract_secrets() {
-        Ok(secrets) => secrets,
-        Err(e) => {
+    let secrets = connection.dangerous_extract_secrets()
+        .map_err(|e| {
             warn!("Failed to extract secrets from rustls connection: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to extract TLS secrets: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::Other, format!("TLS secret extraction failed: {}", e))
+        })?;
 
     debug!("Successfully extracted TLS secrets from rustls");
 
     // Convert rustls secrets to kTLS key material
-    let keys = match convert_rustls_secrets(secrets) {
-        Ok(keys) => keys,
-        Err(e) => {
+    let keys = convert_rustls_secrets(secrets)
+        .map_err(|e| {
             warn!("Failed to convert rustls secrets to kTLS keys: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to convert TLS secrets: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::InvalidData, format!("Key conversion failed: {}", e))
+        })?;
 
     debug!("Converted rustls secrets to kTLS key material");
 
     // Create kTLS connection
-    let mut ktls_conn = match KtlsConnection::new(tcp_stream, KtlsMode::Both) {
-        Ok(conn) => conn,
-        Err(e) => {
+    let mut ktls_conn = KtlsConnection::new(tcp_stream, KtlsMode::Both)
+        .map_err(|e| {
             warn!("Failed to create kTLS connection: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to create kTLS connection: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::Other, format!("kTLS connection creation failed: {}", e))
+        })?;
 
     // Configure kTLS with the extracted keys
-    if let Err(e) = ktls_conn.configure_ktls(keys).await {
-        warn!("Failed to configure kTLS: {:?}", e);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to configure kTLS: {:?}", e),
-        ));
-    }
+    ktls_conn.configure_ktls(keys).await
+        .map_err(|e| {
+            warn!("Failed to configure kTLS: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, format!("kTLS configuration failed: {}", e))
+        })?;
 
     info!(
         "kTLS configured successfully for {}→{}",
@@ -131,17 +118,24 @@ pub async fn configure_ktls_outbound(
 ///
 /// # Returns
 ///
-/// Returns the underlying TCP stream with kTLS configured, or an error.
+/// Returns the underlying TCP stream with kTLS configured.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - kTLS is not enabled in configuration
+/// - Secret extraction fails
+/// - kTLS configuration fails
 pub async fn configure_ktls_inbound(
     tls_stream: tokio_rustls::server::TlsStream<TcpStream>,
     config: &Config,
 ) -> Result<TcpStream, io::Error> {
     // Check if kTLS is enabled for inbound
     if !config.ktls_config.enabled || !config.ktls_config.inbound_enabled {
-        debug!("kTLS not enabled for inbound, using standard TLS");
+        debug!("kTLS not enabled for inbound, cannot configure");
         return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "kTLS is not enabled, cannot extract underlying TCP stream",
+            io::ErrorKind::InvalidInput,
+            "kTLS is not enabled in configuration",
         ));
     }
 
@@ -153,53 +147,36 @@ pub async fn configure_ktls_inbound(
     let remote_addr = tcp_stream.peer_addr()?;
 
     // Extract secrets from rustls connection
-    let secrets = match connection.dangerous_extract_secrets() {
-        Ok(secrets) => secrets,
-        Err(e) => {
+    let secrets = connection.dangerous_extract_secrets()
+        .map_err(|e| {
             warn!("Failed to extract secrets from rustls connection: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to extract TLS secrets: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::Other, format!("TLS secret extraction failed: {}", e))
+        })?;
 
     debug!("Successfully extracted TLS secrets from rustls");
 
     // Convert rustls secrets to kTLS key material
-    let keys = match convert_rustls_secrets(secrets) {
-        Ok(keys) => keys,
-        Err(e) => {
+    let keys = convert_rustls_secrets(secrets)
+        .map_err(|e| {
             warn!("Failed to convert rustls secrets to kTLS keys: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to convert TLS secrets: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::InvalidData, format!("Key conversion failed: {}", e))
+        })?;
 
     debug!("Converted rustls secrets to kTLS key material");
 
     // Create kTLS connection
-    let mut ktls_conn = match KtlsConnection::new(tcp_stream, KtlsMode::Both) {
-        Ok(conn) => conn,
-        Err(e) => {
+    let mut ktls_conn = KtlsConnection::new(tcp_stream, KtlsMode::Both)
+        .map_err(|e| {
             warn!("Failed to create kTLS connection: {:?}", e);
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to create kTLS connection: {:?}", e),
-            ));
-        }
-    };
+            io::Error::new(io::ErrorKind::Other, format!("kTLS connection creation failed: {}", e))
+        })?;
 
     // Configure kTLS with the extracted keys
-    if let Err(e) = ktls_conn.configure_ktls(keys).await {
-        warn!("Failed to configure kTLS: {:?}", e);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to configure kTLS: {:?}", e),
-        ));
-    }
+    ktls_conn.configure_ktls(keys).await
+        .map_err(|e| {
+            warn!("Failed to configure kTLS: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, format!("kTLS configuration failed: {}", e))
+        })?;
 
     info!(
         "kTLS configured successfully for {}←{}",

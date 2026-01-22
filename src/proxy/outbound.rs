@@ -365,18 +365,21 @@ impl OutboundConnection {
     /// Proxy connection using kTLS direct mode (bypass HBONE)
     ///
     /// This method implements the kTLS direct socket mode where:
-    /// 1. TLS handshake is performed on the original socket
-    /// 2. Keys are extracted and kTLS is configured
-    /// 3. Traffic flows directly without HTTP/2 encapsulation
+    /// 1. The original socket from the application is used directly
+    /// 2. TLS handshake is performed with the destination workload
+    /// 3. Keys are extracted and kTLS is configured
+    /// 4. The socket becomes a direct encrypted connection to destination
+    /// 5. Traffic flows directly without HTTP/2 encapsulation or proxying
+    ///
+    /// Note: In this mode, we don't proxy data. The socket itself IS the
+    /// connection to the destination, and the kernel handles encryption.
     async fn proxy_to_ktls_direct(
         &mut self,
-        stream: TcpStream,
+        _stream: TcpStream,
         _remote_addr: SocketAddr,
-        req: &Request,
-        connection_stats: &ConnectionResult,
+        _req: &Request,
+        _connection_stats: &ConnectionResult,
     ) -> Result<(), Error> {
-        use crate::proxy::ktls_helpers;
-
         // Check if kTLS is properly enabled
         if !self.pi.cfg.ktls_config.enabled
             || !self.pi.cfg.ktls_config.outbound_enabled
@@ -388,40 +391,25 @@ impl OutboundConnection {
             ))));
         }
 
-        info!(
-            "Using kTLS direct mode for connection to {:?}",
-            req.actual_destination
-        );
-
-        // Fetch certificate and create TLS connector
-        let cert = self
-            .pi
-            .local_workload_information
-            .fetch_certificate()
-            .await?;
-        let connector = cert.outbound_connector(req.upstream_sans.clone())?;
-
-        // Perform TLS handshake on the stream
-        let tls_stream = connector.connect(stream).await?;
-
-        // Configure kTLS (extract keys and offload to kernel)
-        let ktls_stream = ktls_helpers::configure_ktls_outbound(tls_stream, &self.pi.cfg).await?;
-
-        // Now connect to the destination
-        let outbound = super::freebind_connect(
-            None,
-            req.actual_destination,
-            self.pi.socket_factory.as_ref(),
-        )
-        .await?;
-
-        // Proxy data between kTLS-enabled stream and destination
-        copy::copy_bidirectional(
-            copy::TcpStreamSplitter(ktls_stream),
-            copy::TcpStreamSplitter(outbound),
-            connection_stats,
-        )
-        .await
+        // TODO: Full kTLS direct mode implementation
+        // 
+        // The complete implementation requires:
+        // 1. Modify the socket interception at iptables level to preserve destination
+        // 2. Perform TLS handshake directly with the destination (not with another ztunnel)
+        // 3. Extract keys and configure kTLS on the socket
+        // 4. Return the socket to the application (not proxy data)
+        //
+        // This is a significant architectural change that needs:
+        // - Changes to socket handling at the listener level
+        // - New connection tracking mechanism
+        // - Coordination with inbound ztunnel for proper handshake
+        //
+        // For now, return an error indicating this is not yet fully implemented.
+        
+        Err(Error::Generic(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "kTLS direct mode is not yet fully implemented. Use HBONE mode instead.",
+        ))))
     }
 
     fn conn_metrics_from_request(req: &Request) -> ConnectionOpen {
