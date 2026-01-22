@@ -44,7 +44,7 @@ pub mod linux;
 
 pub use config::KtlsConfig;
 pub use connection::{KtlsConnection, KtlsMode};
-pub use key_extraction::{KeyExtractor, KeyExtractionStrategy};
+pub use key_extraction::{KeyExtractor, KeyExtractionStrategy, convert_rustls_secrets};
 pub use key_manager::{KeyMaterial, KeyManager, TlsKeys};
 
 use thiserror::Error;
