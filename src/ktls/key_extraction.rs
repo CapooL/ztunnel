@@ -26,6 +26,7 @@ use crate::ktls::key_manager::{ConnectionId, KeyManager};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use rustls::{ExtractedSecrets, ConnectionTrafficSecrets};
 
 /// Key extraction strategy
 #[derive(Clone)]
@@ -206,6 +207,104 @@ pub async fn extract_keys_from_connection(
 }
 
 /// Convert rustls extracted secrets to kTLS key material
+///
+/// This function takes the secrets extracted from rustls via `dangerous_extract_secrets()`
+/// and converts them to the format required by Linux kTLS.
+///
+/// # Example
+///
+/// ```ignore
+/// use rustls::Connection;
+///
+/// let tls_stream = connector.connect(domain, tcp_stream).await?;
+/// let (tcp_stream, connection) = tls_stream.into_inner();
+/// let secrets = connection.dangerous_extract_secrets()?;
+///
+/// let keys = convert_rustls_secrets(&secrets)?;
+/// ```
+pub fn convert_rustls_secrets(secrets: ExtractedSecrets) -> Result<TlsKeys> {
+    let (tx_seq, tx_secrets) = secrets.tx;
+    let (rx_seq, rx_secrets) = secrets.rx;
+
+    // Convert TX secrets
+    let tx_material = match tx_secrets {
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1301, // TLS_AES_128_GCM_SHA256
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1302, // TLS_AES_256_GCM_SHA384
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304, // TLS 1.3
+                cipher_suite: 0x1303, // TLS_CHACHA20_POLY1305_SHA256
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: tx_seq,
+            }
+        }
+        _ => {
+            return Err(KtlsError::InvalidCipherSuite(
+                "Unsupported cipher suite for kTLS".to_string()
+            ));
+        }
+    };
+
+    // Convert RX secrets
+    let rx_material = match rx_secrets {
+        ConnectionTrafficSecrets::Aes128Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1301,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Aes256Gcm { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1302,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv } => {
+            KeyMaterial {
+                tls_version: 0x0304,
+                cipher_suite: 0x1303,
+                key: key.as_ref().to_vec(),
+                iv: iv.as_ref().to_vec(),
+                seq: rx_seq,
+            }
+        }
+        _ => {
+            return Err(KtlsError::InvalidCipherSuite(
+                "Unsupported cipher suite for kTLS".to_string()
+            ));
+        }
+    };
+
+    Ok(TlsKeys {
+        tx: tx_material,
+        rx: rx_material,
+    })
+}
+
+/// Convert rustls extracted secrets to kTLS key material (placeholder version)
 ///
 /// This function takes the secrets extracted from rustls via `dangerous_extract_secrets()`
 /// and converts them to the format required by Linux kTLS.
