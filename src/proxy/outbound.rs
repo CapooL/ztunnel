@@ -226,6 +226,10 @@ impl OutboundConnection {
                 self.proxy_to_tcp(source_stream, &req, &result_tracker)
                     .await
             }
+            OutboundProtocol::KTLS => {
+                self.proxy_to_ktls_direct(source_stream, source_addr, &req, &result_tracker)
+                    .await
+            }
         };
         result_tracker.record(res)
     }
@@ -358,9 +362,71 @@ impl OutboundConnection {
         .await
     }
 
+    /// Proxy connection using kTLS direct mode (bypass HBONE)
+    ///
+    /// This method implements the kTLS direct socket mode where:
+    /// 1. TLS handshake is performed on the original socket
+    /// 2. Keys are extracted and kTLS is configured
+    /// 3. Traffic flows directly without HTTP/2 encapsulation
+    async fn proxy_to_ktls_direct(
+        &mut self,
+        stream: TcpStream,
+        _remote_addr: SocketAddr,
+        req: &Request,
+        connection_stats: &ConnectionResult,
+    ) -> Result<(), Error> {
+        use crate::proxy::ktls_helpers;
+
+        // Check if kTLS is properly enabled
+        if !self.pi.cfg.ktls_config.enabled
+            || !self.pi.cfg.ktls_config.outbound_enabled
+            || !self.pi.cfg.ktls_config.direct_socket_mode
+        {
+            return Err(Error::Generic(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "kTLS direct mode not enabled in configuration",
+            ))));
+        }
+
+        info!(
+            "Using kTLS direct mode for connection to {:?}",
+            req.actual_destination
+        );
+
+        // Fetch certificate and create TLS connector
+        let cert = self
+            .pi
+            .local_workload_information
+            .fetch_certificate()
+            .await?;
+        let connector = cert.outbound_connector(req.upstream_sans.clone())?;
+
+        // Perform TLS handshake on the stream
+        let tls_stream = connector.connect(stream).await?;
+
+        // Configure kTLS (extract keys and offload to kernel)
+        let ktls_stream = ktls_helpers::configure_ktls_outbound(tls_stream, &self.pi.cfg).await?;
+
+        // Now connect to the destination
+        let outbound = super::freebind_connect(
+            None,
+            req.actual_destination,
+            self.pi.socket_factory.as_ref(),
+        )
+        .await?;
+
+        // Proxy data between kTLS-enabled stream and destination
+        copy::copy_bidirectional(
+            copy::TcpStreamSplitter(ktls_stream),
+            copy::TcpStreamSplitter(outbound),
+            connection_stats,
+        )
+        .await
+    }
+
     fn conn_metrics_from_request(req: &Request) -> ConnectionOpen {
         let (derived_source, security_policy) = match req.protocol {
-            OutboundProtocol::HBONE | OutboundProtocol::DOUBLEHBONE => (
+            OutboundProtocol::HBONE | OutboundProtocol::DOUBLEHBONE | OutboundProtocol::KTLS => (
                 Some(DerivedWorkload {
                     // We are going to do mTLS, so report our identity
                     identity: Some(req.source.as_ref().identity()),
