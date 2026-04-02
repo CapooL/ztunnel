@@ -16,6 +16,7 @@ mod certificate;
 mod control;
 pub mod crl;
 pub mod csr;
+pub mod ktls;
 mod lib;
 #[cfg(any(test, feature = "testing"))]
 pub mod mock;
@@ -25,6 +26,7 @@ use std::sync::Arc;
 
 pub use crate::tls::certificate::*;
 pub use crate::tls::control::*;
+pub use crate::tls::ktls::*;
 pub use crate::tls::lib::*;
 pub use crate::tls::workload::*;
 use hyper::http::uri::InvalidUri;
